@@ -5,7 +5,7 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
-import os, io, math, uuid
+import os, io, math, uuid, time
 from PIL import Image, ImageOps
 
 # Optional: use OpenAI vision engine if OPENAI_API_KEY is set
@@ -93,4 +93,54 @@ async def scan(image: UploadFile = File(...)):
         "list_price": list_price,
         "our_price": our_price,
         "source": source
+    })
+
+
+@app.post("/api/scan")
+async def scan(
+    file: UploadFile | None = File(default=None),
+    image: UploadFile | None = File(default=None),
+):
+    """Accepts multipart field name 'file' (frontend) or 'image' (older clients).
+    Returns JSON compatible with the existing UI: {ok, list_price, our_price, runtime_ms}.
+    """
+    t0 = time.time()
+
+    up = file or image
+    if up is None:
+        return JSONResponse({"ok": False, "error": "No file uploaded (expected field 'file')."}, status_code=422)
+
+    data = await up.read()
+    img = _downscale_and_fix_orientation(data)
+
+    # save temp jpeg (engine expects a path)
+    tmp = BASE_DIR / f"_tmp_{uuid.uuid4().hex}.jpg"
+    img.save(tmp, "JPEG", quality=86)
+
+    list_price = 0.0
+    source = "manual"
+    try:
+        if generate_meta is not None and os.getenv("OPENAI_API_KEY", "").strip():
+            meta = generate_meta(str(tmp), art_id="lagerabverkauf", context=None)
+            if meta and meta.get("retail_price"):
+                list_price = float(meta["retail_price"])
+                source = "openai"
+    except Exception:
+        source = "failed"
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    list_price = _safe_round_price_eur(list_price)
+    our_price = _our_price(list_price)
+    ms = int((time.time() - t0) * 1000)
+
+    return JSONResponse({
+        "ok": True,
+        "list_price": list_price,
+        "our_price": our_price,
+        "runtime_ms": ms,
+        "source": source,
     })
