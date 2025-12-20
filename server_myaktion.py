@@ -36,6 +36,7 @@ def sw():
     return FileResponse(str(BASE_DIR / "sw.js"), media_type="application/javascript")
 
 @app.get("/health")
+@app.get("/api/health")
 def health():
     return {"ok": True}
 
