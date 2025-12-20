@@ -1,108 +1,169 @@
-# server_myaktion.py – MyAktion Lagerabverkauf (Foto → Preis)
+# server_myaktion.py – MyAktion Lagerabverkauf (Multi-Foto → Preis)
 # Start (Render):
 #   uvicorn server_myaktion:app --host 0.0.0.0 --port $PORT
-from fastapi import FastAPI, UploadFile, File, Request
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+
+from __future__ import annotations
+
+import io
+import os
+import time
+import uuid
 from pathlib import Path
-import os, io, math, uuid, time
+from typing import List, Optional
+
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 
-# Optional: use OpenAI vision engine if OPENAI_API_KEY is set
+# Optional: OpenAI vision engine if OPENAI_API_KEY is set
 try:
-    from ki_engine_openai import generate_meta
+    from ki_engine_openai import generate_meta  # expects: generate_meta(image_path, art_id, context) -> dict
 except Exception:
     generate_meta = None
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI()
+app = FastAPI(title="MyAktion Lagerabverkauf")
 
 # Serve static assets
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-@app.get("/")
-def home():
-    return FileResponse(str(BASE_DIR / "index.html"))
-
-@app.get("/site.webmanifest")
-def manifest():
-    return FileResponse(str(BASE_DIR / "site.webmanifest"), media_type="application/manifest+json")
-
-@app.get("/sw.js")
-def sw():
-    # Must be at root scope for PWA
-    return FileResponse(str(BASE_DIR / "sw.js"), media_type="application/javascript")
-
-@app.get("/health")
-def health():
-    return {"ok": True}
 
 def _safe_round_price_eur(v: float) -> float:
-    # keep 2 decimals, avoid negative
-    if not v or v < 0:
+    try:
+        return round(float(v), 2)
+    except Exception:
         return 0.0
-    return round(float(v), 2)
+
 
 def _our_price(list_price: float) -> float:
-    # -20%
     return _safe_round_price_eur(list_price * 0.80)
+
 
 def _downscale_and_fix_orientation(image_bytes: bytes) -> Image.Image:
     img = Image.open(io.BytesIO(image_bytes))
     img = ImageOps.exif_transpose(img)
     img = img.convert("RGB")
-    max_side = 1280
+    max_side = 1600
     w, h = img.size
     scale = min(max_side / max(w, h), 1.0)
     if scale < 1.0:
-        img = img.resize((int(w*scale), int(h*scale)), Image.LANCZOS)
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
     return img
+
+
+def _extract_price_from_meta(meta: dict) -> float:
+    # Accept a few likely keys
+    for k in ("retail_price", "listenpreis", "list_price", "price"):
+        if k in meta and meta[k] not in (None, ""):
+            try:
+                return float(str(meta[k]).replace(",", "."))
+            except Exception:
+                continue
+    return 0.0
+
+
+@app.get("/", response_class=HTMLResponse)
+def home():
+    return FileResponse(str(BASE_DIR / "index.html"))
+
+
+@app.get("/health")
+@app.get("/api/health")
+def health():
+    return {"ok": True}
+
+
+# Root-level convenience routes (many browsers request these at /)
+@app.get("/favicon.ico")
+def favicon():
+    return FileResponse(str(STATIC_DIR / "favicon.ico"))
+
+
+@app.get("/apple-touch-icon.png")
+def apple_touch():
+    return FileResponse(str(STATIC_DIR / "apple-touch-icon.png"))
+
+
+@app.get("/site.webmanifest")
+def manifest():
+    return FileResponse(str(BASE_DIR / "site.webmanifest"))
+
 
 @app.post("/api/scan")
 async def scan(request: Request):
-    """Field-name agnostic upload handler.
-    Accepts ANY multipart field name (file/image/whatever) and picks the first uploaded file.
-    This avoids FastAPI 422 validation errors caused by mismatched field names.
+    """
+    Multi-photo upload:
+    - Accepts any multipart field names.
+    - Collects ALL uploaded files (works with input[multiple]).
+    - Runs recognition per photo and chooses the best/most likely price.
     """
     t0 = time.time()
 
     form = await request.form()
-    up = None
+    uploads = []
     for v in form.values():
-        # Starlette UploadFile
         if hasattr(v, "filename") and hasattr(v, "file"):
-            up = v
-            break
+            uploads.append(v)
 
-    if up is None:
-        # return a 200 with ok:false so UI can show message instead of generic 422
+    if not uploads:
         return JSONResponse({"ok": False, "error": "Kein Bild empfangen. Bitte Foto erneut auswählen."})
 
-    data = await up.read()
-    img = _downscale_and_fix_orientation(data)
+    if not (os.getenv("OPENAI_API_KEY", "").strip()):
+        # Without key we cannot use vision pricing reliably
+        return JSONResponse({"ok": False, "error": "OPENAI_API_KEY fehlt in Render (Environment). Bitte setzen und neu deployen."})
 
-    tmp = BASE_DIR / f"_tmp_{uuid.uuid4().hex}.jpg"
-    img.save(tmp, "JPEG", quality=86)
+    prices: List[float] = []
+    details = []
+    source = "openai"
 
-    list_price = 0.0
-    source = "manual"
-    try:
-        if generate_meta is not None and os.getenv("OPENAI_API_KEY", "").strip():
-            meta = generate_meta(str(tmp), art_id="lagerabverkauf", context=None)
-            if meta and meta.get("retail_price"):
-                list_price = float(meta["retail_price"])
-                source = "openai"
-    except Exception:
-        source = "failed"
-    finally:
+    for up in uploads:
         try:
-            tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
+            data = await up.read()
+            img = _downscale_and_fix_orientation(data)
+            tmp = BASE_DIR / f"_tmp_{uuid.uuid4().hex}.jpg"
+            img.save(tmp, "JPEG", quality=86)
 
-    list_price = _safe_round_price_eur(list_price)
+            p = 0.0
+            meta = None
+            if generate_meta is not None:
+                meta = generate_meta(str(tmp), art_id="lagerabverkauf", context=None) or {}
+                p = _extract_price_from_meta(meta)
+
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+            p = _safe_round_price_eur(p)
+            if p > 0:
+                prices.append(p)
+            details.append({"filename": up.filename, "price": p})
+        except Exception:
+            details.append({"filename": getattr(up, "filename", "unknown"), "price": 0.0})
+
+    if not prices:
+        ms = int((time.time() - t0) * 1000)
+        return JSONResponse({
+            "ok": True,
+            "list_price": 0.0,
+            "our_price": 0.0,
+            "runtime_ms": ms,
+            "source": "no_price_detected",
+            "details": details
+        })
+
+    # Choose most frequent rounded price; fallback to max if all different
+    rounded = [round(p, 2) for p in prices]
+    # frequency map
+    freq = {}
+    for p in rounded:
+        freq[p] = freq.get(p, 0) + 1
+    best_price = max(freq.items(), key=lambda kv: (kv[1], kv[0]))[0]  # prefer frequent, then higher
+
+    list_price = _safe_round_price_eur(best_price)
     our_price = _our_price(list_price)
     ms = int((time.time() - t0) * 1000)
 
@@ -111,5 +172,6 @@ async def scan(request: Request):
         "list_price": list_price,
         "our_price": our_price,
         "runtime_ms": ms,
-        "source": source
+        "source": source,
+        "details": details
     })

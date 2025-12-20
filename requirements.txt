@@ -1,6 +1,5 @@
 fastapi
-uvicorn[standard]
+uvicorn
 python-multipart
 pillow
-numpy
 requests
