@@ -21,11 +21,18 @@
     .card{border-radius:1.5rem}
     .money{font-variant-numeric: tabular-nums;}
   </style>
+
+  <link rel="icon" href="/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
 </head>
 
-<link rel="icon" href="/static/favicon.ico">
-<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
-<link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+
+
+
+
 
 <body>
 <div class="max-w-3xl mx-auto px-4 py-6">
@@ -46,7 +53,7 @@
       <section>
         <div class="text-sm font-semibold mb-2">Foto</div>
 
-        <input id="file" type="file" accept="image/*" capture="environment" class="hidden">
+        <input id="file" type="file" accept="image/*" capture="environment" multiple class="hidden">
 
         <button id="btn" class="btn btn-primary w-full">
           📸 Foto aufnehmen
@@ -128,7 +135,7 @@
   };
 
   file.addEventListener('change', async ()=>{
-    const f = file.files && file.files[0];
+    const files = file.files;
     if(!f) return;
 
     // Preview
@@ -140,7 +147,7 @@
     setBusy(true, "Berechne Preise …");
 
     const fd = new FormData();
-    fd.append('file', f);
+    for (const f of files) { fd.append('files', f); }
 
     try{
       const res = await fetch('/api/scan', { method:'POST', body: fd });
