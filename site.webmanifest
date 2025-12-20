@@ -2,7 +2,6 @@
   "name": "MyAktion Lagerabverkauf",
   "short_name": "MyAktion",
   "start_url": "/",
-  "scope": "/",
   "display": "standalone",
   "background_color": "#1f4aa5",
   "theme_color": "#1f4aa5",
@@ -10,26 +9,12 @@
     {
       "src": "/static/android-chrome-192x192.png",
       "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
+      "type": "image/png"
     },
     {
       "src": "/static/android-chrome-512x512.png",
       "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/static/android-chrome-192x192-maskable.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "maskable"
-    },
-    {
-      "src": "/static/android-chrome-512x512-maskable.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
+      "type": "image/png"
     }
   ]
 }
