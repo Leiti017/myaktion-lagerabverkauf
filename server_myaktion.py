@@ -1,7 +1,7 @@
 # server_myaktion.py – MyAktion Lagerabverkauf (Foto → Preis)
 # Start (Render):
 #   uvicorn server_myaktion:app --host 0.0.0.0 --port $PORT
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
@@ -61,59 +61,28 @@ def _downscale_and_fix_orientation(image_bytes: bytes) -> Image.Image:
     return img
 
 @app.post("/api/scan")
-async def scan(image: UploadFile = File(...)):
-    data = await image.read()
-    img = _downscale_and_fix_orientation(data)
-
-    # save temp jpeg (engine expects a path)
-    tmp = BASE_DIR / f"_tmp_{uuid.uuid4().hex}.jpg"
-    img.save(tmp, "JPEG", quality=86)
-
-    list_price = 0.0
-    source = "manual"
-    try:
-        if generate_meta is not None and os.getenv("OPENAI_API_KEY", "").strip():
-            meta = generate_meta(str(tmp), art_id="lagerabverkauf", context=None)
-            if meta and meta.get("retail_price"):
-                list_price = float(meta["retail_price"])
-                source = "openai"
-    except Exception:
-        # keep 0.0
-        source = "failed"
-    finally:
-        try:
-            tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-    list_price = _safe_round_price_eur(list_price)
-    our_price = _our_price(list_price)
-
-    return JSONResponse({
-        "list_price": list_price,
-        "our_price": our_price,
-        "source": source
-    })
-
-
-@app.post("/api/scan")
-async def scan(
-    file: UploadFile | None = File(default=None),
-    image: UploadFile | None = File(default=None),
-):
-    """Accepts multipart field name 'file' (frontend) or 'image' (older clients).
-    Returns JSON compatible with the existing UI: {ok, list_price, our_price, runtime_ms}.
+async def scan(request: Request):
+    """Field-name agnostic upload handler.
+    Accepts ANY multipart field name (file/image/whatever) and picks the first uploaded file.
+    This avoids FastAPI 422 validation errors caused by mismatched field names.
     """
     t0 = time.time()
 
-    up = file or image
+    form = await request.form()
+    up = None
+    for v in form.values():
+        # Starlette UploadFile
+        if hasattr(v, "filename") and hasattr(v, "file"):
+            up = v
+            break
+
     if up is None:
-        return JSONResponse({"ok": False, "error": "No file uploaded (expected field 'file')."}, status_code=422)
+        # return a 200 with ok:false so UI can show message instead of generic 422
+        return JSONResponse({"ok": False, "error": "Kein Bild empfangen. Bitte Foto erneut auswählen."})
 
     data = await up.read()
     img = _downscale_and_fix_orientation(data)
 
-    # save temp jpeg (engine expects a path)
     tmp = BASE_DIR / f"_tmp_{uuid.uuid4().hex}.jpg"
     img.save(tmp, "JPEG", quality=86)
 
@@ -142,5 +111,5 @@ async def scan(
         "list_price": list_price,
         "our_price": our_price,
         "runtime_ms": ms,
-        "source": source,
+        "source": source
     })
