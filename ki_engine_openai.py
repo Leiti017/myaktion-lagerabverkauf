@@ -1,4 +1,3 @@
-# ki_engine_openai.py
 import os
 import json
 import base64
@@ -14,7 +13,6 @@ def _b64_image(path: str) -> str:
 
 
 def _prompt_for_price(art_id: str) -> str:
-    # Fokus: Preis als Zahl in EUR liefern
     return (
         "Du bist ein Preis-Analyst für Handel/Marktpreise.\n"
         "Aufgabe: Schätze einen realistischen aktuellen Neupreis (Listen-/Marktpreis) in EUR für das Produkt.\n"
@@ -36,10 +34,8 @@ def generate_meta(image_path: str, art_id: str = "lagerabverkauf", context=None)
 
     b64 = _b64_image(image_path)
 
-    # Wir geben optional Kontext mit (mehrere Fotos)
     ctx = ""
     if isinstance(context, dict):
-        # keine riesigen Kontexte – kurz halten
         ctx = json.dumps(context)[:4000]
 
     payload = {
@@ -67,11 +63,9 @@ def generate_meta(image_path: str, art_id: str = "lagerabverkauf", context=None)
     data = r.json()
     text = (data.get("choices", [{}])[0].get("message", {}).get("content", "") or "").strip()
 
-    # Content sollte JSON sein – robust parsen
     try:
         return json.loads(text)
     except Exception:
-        # Fallback: versuch JSON aus Text zu extrahieren
         start = text.find("{")
         end = text.rfind("}")
         if start != -1 and end != -1 and end > start:

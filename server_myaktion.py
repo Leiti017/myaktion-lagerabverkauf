@@ -16,7 +16,6 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 
-# OpenAI vision engine
 try:
     from ki_engine_openai import generate_meta
 except Exception:
@@ -26,13 +25,11 @@ BASE_DIR = Path(__file__).resolve().parent
 
 app = FastAPI(title="MyAktion Preis-Scanner")
 
-# --- Render health check (WICHTIG!) ---
+# Render health check (WICHTIG!)
 @app.get("/health")
 def render_health():
     return {"ok": True}
 
-
-# --- optional: detailed health ---
 @app.get("/api/health")
 def api_health():
     return {
@@ -42,12 +39,10 @@ def api_health():
         "has_openai_key": bool(os.getenv("OPENAI_API_KEY", "").strip()),
     }
 
-
-# --- Static mount ---
+# Static mount
 static_dir = BASE_DIR / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-
 
 @app.get("/")
 def home():
@@ -56,14 +51,12 @@ def home():
         return JSONResponse({"ok": False, "error": "index.html fehlt im Root."}, status_code=500)
     return FileResponse(str(p))
 
-
 @app.get("/site.webmanifest")
 def manifest():
     p = BASE_DIR / "site.webmanifest"
     if not p.exists():
         return JSONResponse({"ok": False, "error": "site.webmanifest fehlt."}, status_code=404)
     return FileResponse(str(p))
-
 
 @app.get("/favicon.ico")
 def favicon():
@@ -72,7 +65,6 @@ def favicon():
         return JSONResponse({"ok": False, "error": "favicon.ico fehlt."}, status_code=404)
     return FileResponse(str(p))
 
-
 @app.get("/apple-touch-icon.png")
 def apple_touch_icon():
     p = BASE_DIR / "apple-touch-icon.png"
@@ -80,23 +72,19 @@ def apple_touch_icon():
         return JSONResponse({"ok": False, "error": "apple-touch-icon.png fehlt."}, status_code=404)
     return FileResponse(str(p))
 
-
 def _downscale_and_fix_orientation(image_bytes: bytes, max_side: int = 1400) -> Image.Image:
     img = Image.open(io.BytesIO(image_bytes))
     img = ImageOps.exif_transpose(img)
     if img.mode not in ("RGB", "L"):
         img = img.convert("RGB")
-
     w, h = img.size
     m = max(w, h)
     if m > max_side:
         scale = max_side / float(m)
         img = img.resize((int(w * scale), int(h * scale)))
-
     if img.mode != "RGB":
         img = img.convert("RGB")
     return img
-
 
 def _safe_round_price_eur(x: float) -> float:
     try:
@@ -107,15 +95,11 @@ def _safe_round_price_eur(x: float) -> float:
         return 0.0
     return round(v + 1e-9, 2)
 
-
 def _our_price(list_price: float) -> float:
-    """
-    Unser Preis = 80% vom Listenpreis (−20%)
-    """
+    # Unser Preis = 80% vom Listenpreis (-20%)
     if not list_price or list_price <= 0:
         return 0.0
     return _safe_round_price_eur(list_price * 0.80)
-
 
 def _extract_price_from_meta(meta: dict) -> float:
     if not meta or not isinstance(meta, dict):
@@ -130,13 +114,8 @@ def _extract_price_from_meta(meta: dict) -> float:
     except Exception:
         return 0.0
 
-
 @app.post("/api/scan")
 async def scan(files: List[UploadFile] = File(...)):
-    """
-    Erwartet Multi-Foto Upload: FormData Feldname "files"
-    (passt zu deiner index.html)
-    """
     t0 = time.time()
 
     if not files:
@@ -150,7 +129,6 @@ async def scan(files: List[UploadFile] = File(...)):
         return JSONResponse({"ok": False, "error": "ki_engine_openai konnte nicht importiert werden."}, status_code=500)
 
     best_price = 0.0
-    best_source = "openai"
     context: Optional[dict] = None
 
     for f in files:
@@ -178,9 +156,6 @@ async def scan(files: List[UploadFile] = File(...)):
         except Exception:
             continue
 
-    our_price = _our_price(best_price)
-
-    # Wenn nichts erkannt wurde: lieber klar melden statt "still 0,00"
     if best_price <= 0:
         return JSONResponse(
             {
@@ -191,12 +166,14 @@ async def scan(files: List[UploadFile] = File(...)):
             status_code=200,
         )
 
+    our_price = _our_price(best_price)
+
     return JSONResponse(
         {
             "ok": True,
             "list_price": best_price,
             "our_price": our_price,
-            "source": best_source,
+            "source": "openai",
             "runtime_ms": int((time.time() - t0) * 1000),
         }
     )
