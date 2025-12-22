@@ -7,6 +7,7 @@
   <meta name="theme-color" content="#1f4aa5">
   <script src="https://cdn.tailwindcss.com"></script>
 
+  <!-- Favicons -->
   <link rel="icon" href="/favicon.ico">
   <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
@@ -14,12 +15,23 @@
   <link rel="manifest" href="/site.webmanifest">
 
   <style>
-    .glass { backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
-    .card { background: rgba(255,255,255,.10); }
+    body{
+      min-height:100vh;
+      background:
+        radial-gradient(1200px 600px at 80% -10%, rgba(255,255,255,.25) 0%, transparent 60%),
+        linear-gradient(135deg,#0b3b93,#1f4aa5 55%,#0b1220);
+      color:#fff;
+    }
+    .glass{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);backdrop-filter:blur(12px)}
+    .btn{padding:.85rem 1.05rem;border-radius:999px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;gap:.55rem}
+    .btn-primary{background:#fff;color:#0b1220;box-shadow:0 12px 30px rgba(0,0,0,.22)}
+    .btn-ghost{color:#fff;border:1px solid rgba(255,255,255,.35);background:transparent}
+    .card{border-radius:1.5rem}
+    .money{font-variant-numeric: tabular-nums;}
   </style>
 </head>
 
-<body class="min-h-screen bg-gradient-to-br from-blue-900 via-blue-700 to-indigo-700 text-white">
+<body>
 <div class="max-w-3xl mx-auto px-4 py-6">
   <header class="flex items-center gap-3 mb-5">
     <div class="w-12 h-12 rounded-2xl bg-white/95 flex items-center justify-center overflow-hidden shadow-lg">
@@ -31,60 +43,54 @@
     </div>
   </header>
 
-  <main class="glass card p-4 md:p-6 shadow-2xl rounded-3xl border border-white/15">
+  <main class="glass card p-4 md:p-6 shadow-2xl">
     <div class="grid md:grid-cols-2 gap-4">
 
-      <section class="p-4 rounded-2xl bg-white/10 border border-white/15">
-        <div class="font-semibold mb-2">Foto(s) aufnehmen / hochladen</div>
+      <!-- Foto -->
+      <section>
+        <div class="text-sm font-semibold mb-2">Fotos</div>
 
-        <!-- Hidden inputs -->
-        <input id="fileGallery" type="file" accept="image/*" multiple class="hidden" />
-        <input id="fileCamera" type="file" accept="image/*" capture="environment" multiple class="hidden" />
+        <!-- NEU: 2 Inputs (Kamera + Dateien), beide hidden -->
+        <input id="file-local" type="file" accept="image/*" multiple class="hidden">
+        <input id="file-camera" type="file" accept="image/*" capture="environment" multiple class="hidden">
 
-        <button id="btnCamera"
-          class="w-full py-3 rounded-2xl bg-white text-blue-900 font-bold hover:bg-white/90 transition">
-          📸 Foto machen
-        </button>
+        <!-- NEU: 2 Buttons, Optik bleibt gleich -->
+        <button id="btn-camera" class="btn btn-primary w-full">📸 Foto machen</button>
+        <button id="btn-local" class="btn btn-ghost w-full mt-2">🗂️ Aus Dateien auswählen</button>
 
-        <button id="btnGallery"
-          class="mt-2 w-full py-3 rounded-2xl bg-white/15 text-white font-semibold border border-white/20 hover:bg-white/20 transition">
-          🗂️ Aus Dateien auswählen
-        </button>
-
-        <div class="mt-3 flex gap-2">
-          <button id="btnScan"
-            class="w-full py-3 rounded-2xl bg-white text-blue-900 font-bold hover:bg-white/90 transition">
-            Preise berechnen
-          </button>
+        <div id="previewWrap" class="mt-3 hidden">
+          <div id="previews" class="grid grid-cols-2 gap-3"></div>
         </div>
 
-        <button id="btnClear"
-          class="mt-2 w-full py-3 rounded-2xl bg-white/15 text-white font-semibold border border-white/20 hover:bg-white/20 transition"
-          disabled>
-          Fotos löschen
-        </button>
+        <div class="mt-3 flex gap-2">
+          <button id="btn-again" class="btn btn-ghost w-full" disabled>♻️ Zurücksetzen</button>
+        </div>
 
-        <button id="btnAgain"
-          class="mt-2 w-full py-3 rounded-2xl bg-white/15 text-white font-semibold border border-white/20 hover:bg-white/20 transition"
-          disabled>
-          Neu scannen
-        </button>
-
-        <div id="previews" class="mt-3 grid grid-cols-3 gap-2"></div>
-        <div id="status" class="mt-3 text-sm opacity-90">Bereit.</div>
+        <div id="status" class="text-xs opacity-80 mt-2">Bereit.</div>
       </section>
 
-      <section class="p-4 rounded-2xl bg-white/10 border border-white/15">
-        <div class="font-semibold mb-2">Ergebnis</div>
+      <!-- Ergebnis -->
+      <section>
+        <div class="text-sm font-semibold mb-2">Ergebnis</div>
 
-        <div class="rounded-2xl bg-black/20 p-4 border border-white/10">
-          <div class="text-sm opacity-85">Listenpreis (100%)</div>
-          <div id="lp" class="text-3xl font-extrabold">–</div>
+        <div class="glass card p-4">
+          <div class="text-xs opacity-80">Listenpreis</div>
+          <div id="lp" class="money text-3xl font-extrabold mt-1">–</div>
 
-          <div class="mt-4 text-sm opacity-85">Unser Preis (80%)</div>
-          <div id="op" class="text-4xl font-extrabold">–</div>
+          <div class="h-px bg-white/10 my-4"></div>
 
-          <div id="note" class="mt-3 text-xs opacity-80">—</div>
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <div class="text-xs opacity-80">Unser Preis</div>
+              <div id="op" class="money text-4xl font-extrabold mt-1">–</div>
+            </div>
+            <div class="text-right">
+              <div class="text-xs opacity-80">Rabatt</div>
+              <div class="text-xl font-extrabold">-20%</div>
+            </div>
+          </div>
+
+          <div id="note" class="text-[11px] opacity-75 mt-3"></div>
         </div>
       </section>
 
@@ -93,79 +99,50 @@
 </div>
 
 <script>
-const fileGallery = document.getElementById("fileGallery");
-const fileCamera  = document.getElementById("fileCamera");
-const btnCamera   = document.getElementById("btnCamera");
-const btnGallery  = document.getElementById("btnGallery");
+const fileLocal = document.getElementById("file-local");
+const fileCamera = document.getElementById("file-camera");
+const btnLocal = document.getElementById("btn-local");
+const btnCamera = document.getElementById("btn-camera");
 
+const btnAgain = document.getElementById("btn-again");
 const previews = document.getElementById("previews");
-const btnScan = document.getElementById("btnScan");
-const btnAgain = document.getElementById("btnAgain");
-const btnClear = document.getElementById("btnClear");
+const previewWrap = document.getElementById("previewWrap");
 const statusEl = document.getElementById("status");
 const lpEl = document.getElementById("lp");
 const opEl = document.getElementById("op");
 const noteEl = document.getElementById("note");
 
-let files = [];
+btnLocal.onclick = () => fileLocal.click();
+btnCamera.onclick = () => fileCamera.click();
 
-function renderPreviews() {
+function resetUI(){
   previews.innerHTML = "";
-  for (const f of files.slice(0, 9)) {
-    const img = document.createElement("img");
-    img.src = URL.createObjectURL(f);
-    img.className = "w-full aspect-square object-cover rounded-xl border border-white/20";
-    previews.appendChild(img);
-  }
-  btnClear.disabled = files.length === 0;
-  statusEl.textContent = files.length ? `${files.length} Foto(s) ausgewählt.` : "Bereit.";
-}
-
-function addFiles(newFiles) {
-  const arr = Array.from(newFiles || []);
-  if (!arr.length) return;
-  files = files.concat(arr);
-  renderPreviews();
-}
-
-function resetAll() {
-  previews.innerHTML = "";
-  files = [];
+  previewWrap.classList.add("hidden");
   lpEl.textContent = "–";
   opEl.textContent = "–";
-  noteEl.textContent = "—";
+  noteEl.textContent = "";
   statusEl.textContent = "Bereit.";
   btnAgain.disabled = true;
-  btnClear.disabled = true;
 }
 
-btnCamera.addEventListener("click", () => fileCamera.click());
-btnGallery.addEventListener("click", () => fileGallery.click());
-
-fileCamera.addEventListener("change", () => {
-  addFiles(fileCamera.files);
+btnAgain.onclick = () => {
+  fileLocal.value = "";
   fileCamera.value = "";
-});
+  resetUI();
+};
 
-fileGallery.addEventListener("change", () => {
-  addFiles(fileGallery.files);
-  fileGallery.value = "";
-});
+async function handleFiles(fileList){
+  const files = fileList;
+  if (!files || files.length === 0) return;
 
-btnClear.addEventListener("click", () => {
   previews.innerHTML = "";
-  files = [];
-  renderPreviews();
-});
+  previewWrap.classList.remove("hidden");
 
-btnAgain.addEventListener("click", () => {
-  resetAll();
-});
-
-btnScan.addEventListener("click", async () => {
-  if (!files.length) {
-    statusEl.textContent = "Bitte zuerst Foto(s) aufnehmen oder auswählen.";
-    return;
+  for (const f of files) {
+    const img = document.createElement("img");
+    img.src = URL.createObjectURL(f);
+    img.className = "w-full aspect-square object-cover rounded-2xl border border-white/20";
+    previews.appendChild(img);
   }
 
   btnAgain.disabled = false;
@@ -182,12 +159,22 @@ btnScan.addEventListener("click", async () => {
 
     lpEl.textContent = (j.list_price || 0).toFixed(2).replace(".", ",") + " €";
     opEl.textContent = (j.our_price || 0).toFixed(2).replace(".", ",") + " €";
-    noteEl.textContent = "OK · " + (j.runtime_ms || 0) + " ms · " + (j.source || "");
+    noteEl.textContent = "OK · " + (j.runtime_ms || 0) + " ms";
     statusEl.textContent = "Fertig.";
   } catch (e) {
     statusEl.textContent = "Fehler.";
     noteEl.textContent = e.message || e;
   }
+}
+
+fileLocal.addEventListener("change", async () => {
+  await handleFiles(fileLocal.files);
+  fileLocal.value = "";
+});
+
+fileCamera.addEventListener("change", async () => {
+  await handleFiles(fileCamera.files);
+  fileCamera.value = "";
 });
 </script>
 </body>

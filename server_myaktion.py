@@ -1,5 +1,5 @@
-# server_myaktion.py
-# Render Start Command:
+# server_myaktion.py – MyAktion Lagerabverkauf (Fotos → Preis)
+# Start (Render):
 #   uvicorn server_myaktion:app --host 0.0.0.0 --port $PORT
 
 from __future__ import annotations
@@ -25,31 +25,24 @@ BASE_DIR = Path(__file__).resolve().parent
 
 app = FastAPI(title="MyAktion Preis-Scanner")
 
-# Render health check (WICHTIG!)
+# Render Health Check (wichtig)
 @app.get("/health")
 def render_health():
     return {"ok": True}
 
-@app.get("/api/health")
-def api_health():
-    return {
-        "ok": True,
-        "service": "myaktion-price-scan",
-        "has_openai_engine": bool(generate_meta is not None),
-        "has_openai_key": bool(os.getenv("OPENAI_API_KEY", "").strip()),
-    }
-
-# Static mount
+# Static folder (icons, logo, etc.)
 static_dir = BASE_DIR / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
 
 @app.get("/")
 def home():
     p = BASE_DIR / "index.html"
     if not p.exists():
-        return JSONResponse({"ok": False, "error": "index.html fehlt im Root."}, status_code=500)
+        return JSONResponse({"ok": False, "error": "index.html fehlt im Root-Verzeichnis."}, status_code=500)
     return FileResponse(str(p))
+
 
 @app.get("/site.webmanifest")
 def manifest():
@@ -58,12 +51,14 @@ def manifest():
         return JSONResponse({"ok": False, "error": "site.webmanifest fehlt."}, status_code=404)
     return FileResponse(str(p))
 
+
 @app.get("/favicon.ico")
 def favicon():
     p = BASE_DIR / "favicon.ico"
     if not p.exists():
         return JSONResponse({"ok": False, "error": "favicon.ico fehlt."}, status_code=404)
     return FileResponse(str(p))
+
 
 @app.get("/apple-touch-icon.png")
 def apple_touch_icon():
@@ -72,9 +67,20 @@ def apple_touch_icon():
         return JSONResponse({"ok": False, "error": "apple-touch-icon.png fehlt."}, status_code=404)
     return FileResponse(str(p))
 
+
+@app.get("/api/health")
+def health():
+    return {
+        "ok": True,
+        "service": "myaktion-price-scan",
+        "has_openai_engine": bool(generate_meta is not None),
+        "has_openai_key": bool(os.getenv("OPENAI_API_KEY", "").strip()),
+    }
+
+
 def _downscale_and_fix_orientation(image_bytes: bytes, max_side: int = 1400) -> Image.Image:
     img = Image.open(io.BytesIO(image_bytes))
-    img = ImageOps.exif_transpose(img)
+    img = ImageOps.exif_transpose(img)  # fix orientation
     if img.mode not in ("RGB", "L"):
         img = img.convert("RGB")
     w, h = img.size
@@ -86,6 +92,7 @@ def _downscale_and_fix_orientation(image_bytes: bytes, max_side: int = 1400) -> 
         img = img.convert("RGB")
     return img
 
+
 def _safe_round_price_eur(x: float) -> float:
     try:
         v = float(x)
@@ -95,14 +102,16 @@ def _safe_round_price_eur(x: float) -> float:
         return 0.0
     return round(v + 1e-9, 2)
 
+
 def _our_price(list_price: float) -> float:
     # Unser Preis = 80% vom Listenpreis (-20%)
     if not list_price or list_price <= 0:
         return 0.0
     return _safe_round_price_eur(list_price * 0.80)
 
+
 def _extract_price_from_meta(meta: dict) -> float:
-    if not meta or not isinstance(meta, dict):
+    if not meta:
         return 0.0
     rp = meta.get("retail_price")
     if rp is None:
@@ -114,6 +123,7 @@ def _extract_price_from_meta(meta: dict) -> float:
     except Exception:
         return 0.0
 
+
 @app.post("/api/scan")
 async def scan(files: List[UploadFile] = File(...)):
     t0 = time.time()
@@ -121,15 +131,11 @@ async def scan(files: List[UploadFile] = File(...)):
     if not files:
         return JSONResponse({"ok": False, "error": "Keine Dateien erhalten."}, status_code=400)
 
-    has_key = bool(os.getenv("OPENAI_API_KEY", "").strip())
-    if not has_key:
-        return JSONResponse({"ok": False, "error": "OPENAI_API_KEY fehlt in Render."}, status_code=500)
-
-    if generate_meta is None:
-        return JSONResponse({"ok": False, "error": "ki_engine_openai konnte nicht importiert werden."}, status_code=500)
-
     best_price = 0.0
+    best_source = "manual"
     context: Optional[dict] = None
+
+    has_key = bool(os.getenv("OPENAI_API_KEY", "").strip())
 
     for f in files:
         try:
@@ -139,32 +145,31 @@ async def scan(files: List[UploadFile] = File(...)):
             tmp_path = BASE_DIR / f"_tmp_{uuid.uuid4().hex}.jpg"
             img.save(tmp_path, "JPEG", quality=86)
 
-            meta = generate_meta(str(tmp_path), art_id="lagerabverkauf", context=context)
-            if isinstance(meta, dict):
-                context = meta
+            list_price = 0.0
+            source = "manual"
 
-            list_price = _safe_round_price_eur(_extract_price_from_meta(meta))
+            if generate_meta is not None and has_key:
+                meta = generate_meta(str(tmp_path), art_id="lagerabverkauf", context=context)
+                if isinstance(meta, dict):
+                    context = meta
+                list_price = _extract_price_from_meta(meta)
+                source = "openai"
+            else:
+                source = "no-openai-key" if not has_key else "no-openai-engine"
 
             try:
                 tmp_path.unlink(missing_ok=True)
             except Exception:
                 pass
 
+            list_price = _safe_round_price_eur(list_price)
+
             if list_price > best_price:
                 best_price = list_price
+                best_source = source
 
         except Exception:
             continue
-
-    if best_price <= 0:
-        return JSONResponse(
-            {
-                "ok": False,
-                "error": "Kein Preis erkannt. Bitte zusätzlich ein Foto vom Preisschild/Barcode machen (nah & scharf).",
-                "runtime_ms": int((time.time() - t0) * 1000),
-            },
-            status_code=200,
-        )
 
     our_price = _our_price(best_price)
 
@@ -173,7 +178,7 @@ async def scan(files: List[UploadFile] = File(...)):
             "ok": True,
             "list_price": best_price,
             "our_price": our_price,
-            "source": "openai",
+            "source": best_source,
             "runtime_ms": int((time.time() - t0) * 1000),
         }
     )
