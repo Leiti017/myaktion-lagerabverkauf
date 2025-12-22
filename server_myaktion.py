@@ -1,5 +1,5 @@
-# server_myaktion.py – MyAktion Lagerabverkauf (Fotos → Preis)
-# Start (Render):
+# server_myaktion.py
+# Render Start Command:
 #   uvicorn server_myaktion:app --host 0.0.0.0 --port $PORT
 
 from __future__ import annotations
@@ -9,14 +9,14 @@ import os
 import time
 import uuid
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 
-# Optional: OpenAI vision engine
+# OpenAI vision engine
 try:
     from ki_engine_openai import generate_meta
 except Exception:
@@ -26,7 +26,24 @@ BASE_DIR = Path(__file__).resolve().parent
 
 app = FastAPI(title="MyAktion Preis-Scanner")
 
-# Static folder (icons, logo, etc.)
+# --- Render health check (WICHTIG!) ---
+@app.get("/health")
+def render_health():
+    return {"ok": True}
+
+
+# --- optional: detailed health ---
+@app.get("/api/health")
+def api_health():
+    return {
+        "ok": True,
+        "service": "myaktion-price-scan",
+        "has_openai_engine": bool(generate_meta is not None),
+        "has_openai_key": bool(os.getenv("OPENAI_API_KEY", "").strip()),
+    }
+
+
+# --- Static mount ---
 static_dir = BASE_DIR / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
@@ -36,7 +53,7 @@ if static_dir.exists():
 def home():
     p = BASE_DIR / "index.html"
     if not p.exists():
-        return JSONResponse({"ok": False, "error": "index.html fehlt im Root-Verzeichnis."}, status_code=500)
+        return JSONResponse({"ok": False, "error": "index.html fehlt im Root."}, status_code=500)
     return FileResponse(str(p))
 
 
@@ -64,26 +81,18 @@ def apple_touch_icon():
     return FileResponse(str(p))
 
 
-@app.get("/api/health")
-def health():
-    return {
-        "ok": True,
-        "service": "myaktion-price-scan",
-        "has_openai_engine": bool(generate_meta is not None),
-        "has_openai_key": bool(os.getenv("OPENAI_API_KEY", "").strip()),
-    }
-
-
 def _downscale_and_fix_orientation(image_bytes: bytes, max_side: int = 1400) -> Image.Image:
     img = Image.open(io.BytesIO(image_bytes))
-    img = ImageOps.exif_transpose(img)  # fix orientation
+    img = ImageOps.exif_transpose(img)
     if img.mode not in ("RGB", "L"):
         img = img.convert("RGB")
+
     w, h = img.size
     m = max(w, h)
     if m > max_side:
         scale = max_side / float(m)
         img = img.resize((int(w * scale), int(h * scale)))
+
     if img.mode != "RGB":
         img = img.convert("RGB")
     return img
@@ -101,23 +110,16 @@ def _safe_round_price_eur(x: float) -> float:
 
 def _our_price(list_price: float) -> float:
     """
-    Beispiel-Logik:
-    - wenn kein Preis erkannt -> 0
-    - sonst 60% vom Listenpreis
-    Passe das an dein reales Preis-System an.
+    Unser Preis = 80% vom Listenpreis (−20%)
     """
     if not list_price or list_price <= 0:
         return 0.0
-    return _safe_round_price_eur(list_price * 0.60)
+    return _safe_round_price_eur(list_price * 0.80)
 
 
 def _extract_price_from_meta(meta: dict) -> float:
-    """
-    Versucht robust den Preis aus generate_meta() zu holen.
-    """
-    if not meta:
+    if not meta or not isinstance(meta, dict):
         return 0.0
-    # bevorzugt retail_price
     rp = meta.get("retail_price")
     if rp is None:
         rp = meta.get("price")
@@ -132,7 +134,7 @@ def _extract_price_from_meta(meta: dict) -> float:
 @app.post("/api/scan")
 async def scan(files: List[UploadFile] = File(...)):
     """
-    Erwartet Multi-Foto Upload mit Feldnamen: files
+    Erwartet Multi-Foto Upload: FormData Feldname "files"
     (passt zu deiner index.html)
     """
     t0 = time.time()
@@ -140,15 +142,16 @@ async def scan(files: List[UploadFile] = File(...)):
     if not files:
         return JSONResponse({"ok": False, "error": "Keine Dateien erhalten."}, status_code=400)
 
-    # Wir nehmen den höchsten erkannten Preis über alle Fotos (oft: 1 Foto zeigt Preisschild)
-    best_price = 0.0
-    best_source = "manual"
-
-    # Optionale Kontextweitergabe: 2. Foto ergänzt Details.
-    # Wir reichen dem Engine-Call den "context" weiter, wenn die Engine das unterstützt.
-    context: Optional[dict] = None
-
     has_key = bool(os.getenv("OPENAI_API_KEY", "").strip())
+    if not has_key:
+        return JSONResponse({"ok": False, "error": "OPENAI_API_KEY fehlt in Render."}, status_code=500)
+
+    if generate_meta is None:
+        return JSONResponse({"ok": False, "error": "ki_engine_openai konnte nicht importiert werden."}, status_code=500)
+
+    best_price = 0.0
+    best_source = "openai"
+    context: Optional[dict] = None
 
     for f in files:
         try:
@@ -158,36 +161,35 @@ async def scan(files: List[UploadFile] = File(...)):
             tmp_path = BASE_DIR / f"_tmp_{uuid.uuid4().hex}.jpg"
             img.save(tmp_path, "JPEG", quality=86)
 
-            list_price = 0.0
-            source = "manual"
+            meta = generate_meta(str(tmp_path), art_id="lagerabverkauf", context=context)
+            if isinstance(meta, dict):
+                context = meta
 
-            if generate_meta is not None and has_key:
-                meta = generate_meta(str(tmp_path), art_id="lagerabverkauf", context=context)
-                # Kontext updaten, damit Foto2 helfen kann
-                if isinstance(meta, dict):
-                    context = meta
-
-                list_price = _extract_price_from_meta(meta)
-                source = "openai"
-            else:
-                source = "no-openai-key" if not has_key else "no-openai-engine"
+            list_price = _safe_round_price_eur(_extract_price_from_meta(meta))
 
             try:
                 tmp_path.unlink(missing_ok=True)
             except Exception:
                 pass
 
-            list_price = _safe_round_price_eur(list_price)
-
             if list_price > best_price:
                 best_price = list_price
-                best_source = source
 
         except Exception:
-            # Wenn ein Foto kaputt ist, ignorieren wir es und machen weiter
             continue
 
     our_price = _our_price(best_price)
+
+    # Wenn nichts erkannt wurde: lieber klar melden statt "still 0,00"
+    if best_price <= 0:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Kein Preis erkannt. Bitte zusätzlich ein Foto vom Preisschild/Barcode machen (nah & scharf).",
+                "runtime_ms": int((time.time() - t0) * 1000),
+            },
+            status_code=200,
+        )
 
     return JSONResponse(
         {
