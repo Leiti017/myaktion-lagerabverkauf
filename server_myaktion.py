@@ -26,7 +26,7 @@ BASE_DIR = Path(__file__).resolve().parent
 app = FastAPI(title="MyAktion Preis-Scanner")
 
 # Render Health Check (wichtig)
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def render_health():
     return {"ok": True}
 
