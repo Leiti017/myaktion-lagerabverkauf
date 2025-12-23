@@ -44,27 +44,43 @@ def home():
     return FileResponse(str(p))
 
 
-@app.get("/site.webmanifest")
-def manifest():
-    p = BASE_DIR / "site.webmanifest"
+# =========================
+# PWA / Manifest
+# =========================
+
+# Haupt-Manifest (dein index.html lädt /manifest.json)
+@app.get("/manifest.json")
+def manifest_json():
+    p = static_dir / "manifest.json"
     if not p.exists():
-        return JSONResponse({"ok": False, "error": "site.webmanifest fehlt."}, status_code=404)
+        return JSONResponse({"ok": False, "error": "static/manifest.json fehlt."}, status_code=404)
     return FileResponse(str(p))
 
+# Kompatibilität: falls irgendwas noch /site.webmanifest erwartet
+@app.get("/site.webmanifest")
+def site_webmanifest():
+    p = static_dir / "manifest.json"
+    if not p.exists():
+        return JSONResponse({"ok": False, "error": "static/manifest.json fehlt."}, status_code=404)
+    return FileResponse(str(p))
+
+
+# =========================
+# Favicons / iOS Icons
+# =========================
 
 @app.get("/favicon.ico")
 def favicon():
-    p = BASE_DIR / "favicon.ico"
+    p = static_dir / "favicon.ico"
     if not p.exists():
-        return JSONResponse({"ok": False, "error": "favicon.ico fehlt."}, status_code=404)
+        return JSONResponse({"ok": False, "error": "static/favicon.ico fehlt."}, status_code=404)
     return FileResponse(str(p))
-
 
 @app.get("/apple-touch-icon.png")
 def apple_touch_icon():
-    p = BASE_DIR / "apple-touch-icon.png"
+    p = static_dir / "apple-touch-icon.png"
     if not p.exists():
-        return JSONResponse({"ok": False, "error": "apple-touch-icon.png fehlt."}, status_code=404)
+        return JSONResponse({"ok": False, "error": "static/apple-touch-icon.png fehlt."}, status_code=404)
     return FileResponse(str(p))
 
 
