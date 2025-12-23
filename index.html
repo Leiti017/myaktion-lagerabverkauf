@@ -7,25 +7,11 @@
   <meta name="theme-color" content="#1f4aa5">
   <script src="https://cdn.tailwindcss.com"></script>
 
-	<!-- Icons -->
-	<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
-	<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
-	<link rel="icon" type="image/png" sizes="48x48" href="/favicon-48x48.png">
-	<link rel="shortcut icon" href="/favicon.ico">
-
-	<!-- iOS -->
-	<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon-180x180.png">
-	<link rel="apple-touch-icon" sizes="167x167" href="/apple-touch-icon-167x167.png">
-	<link rel="apple-touch-icon" sizes="152x152" href="/apple-touch-icon-152x152.png">
-
-	<!-- PWA -->
-	<link rel="manifest" href="/manifest.json">
-	<meta name="theme-color" content="#1E66D1">
-
-	<!-- iOS PWA -->
-	<meta name="apple-mobile-web-app-capable" content="yes">
-	<meta name="apple-mobile-web-app-status-bar-style" content="default">
-	<meta name="apple-mobile-web-app-title" content="my%aktion">
+  <link rel="icon" href="/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
 
   <style>
     body{
@@ -63,11 +49,9 @@
       <section>
         <div class="text-sm font-semibold mb-2">Fotos</div>
 
-        <!-- NEU: 2 Inputs (Kamera + Dateien), beide hidden -->
         <input id="file-local" type="file" accept="image/*" multiple class="hidden">
         <input id="file-camera" type="file" accept="image/*" capture="environment" multiple class="hidden">
 
-        <!-- NEU: 2 Buttons, Optik bleibt gleich -->
         <button id="btn-camera" class="btn btn-primary w-full">📸 Foto machen</button>
         <button id="btn-local" class="btn btn-ghost w-full mt-2">🗂️ Aus Dateien auswählen</button>
 
@@ -87,20 +71,38 @@
         <div class="text-sm font-semibold mb-2">Ergebnis</div>
 
         <div class="glass card p-4">
-          <div class="text-xs opacity-80">Listenpreis</div>
+          <div class="text-xs opacity-80">Listenpreis (100%)</div>
           <div id="lp" class="money text-3xl font-extrabold mt-1">–</div>
 
           <div class="h-px bg-white/10 my-4"></div>
 
-          <div class="flex items-center justify-between gap-3">
-            <div>
-              <div class="text-xs opacity-80">Unser Preis</div>
-              <div id="op" class="money text-4xl font-extrabold mt-1">–</div>
+          <!-- Rabatt-Liste von oben nach unten -->
+          <div class="grid gap-2">
+
+            <!-- -20% (grün, Standard) -->
+            <div class="flex items-center justify-between rounded-2xl border border-green-400/25 bg-green-500/10 px-3 py-2">
+              <div class="text-sm font-extrabold text-green-300">-20% (Standard)</div>
+              <div id="p20" class="money text-2xl font-extrabold text-green-100">–</div>
             </div>
-            <div class="text-right">
-              <div class="text-xs opacity-80">Rabatt</div>
-              <div class="text-xl font-extrabold">-20%</div>
+
+            <!-- -30% (orange) -->
+            <div class="flex items-center justify-between rounded-2xl border border-orange-400/25 bg-orange-500/10 px-3 py-2">
+              <div class="text-sm font-extrabold text-orange-300">-30%</div>
+              <div id="p30" class="money text-xl font-extrabold text-orange-100">–</div>
             </div>
+
+            <!-- -40% (orange) -->
+            <div class="flex items-center justify-between rounded-2xl border border-orange-400/25 bg-orange-500/10 px-3 py-2">
+              <div class="text-sm font-extrabold text-orange-300">-40%</div>
+              <div id="p40" class="money text-xl font-extrabold text-orange-100">–</div>
+            </div>
+
+            <!-- -50% (rot) -->
+            <div class="flex items-center justify-between rounded-2xl border border-red-400/25 bg-red-500/10 px-3 py-2">
+              <div class="text-sm font-extrabold text-red-300">-50%</div>
+              <div id="p50" class="money text-xl font-extrabold text-red-100">–</div>
+            </div>
+
           </div>
 
           <div id="note" class="text-[11px] opacity-75 mt-3"></div>
@@ -122,17 +124,52 @@ const previews = document.getElementById("previews");
 const previewWrap = document.getElementById("previewWrap");
 const statusEl = document.getElementById("status");
 const lpEl = document.getElementById("lp");
-const opEl = document.getElementById("op");
 const noteEl = document.getElementById("note");
+
+const p20El = document.getElementById("p20");
+const p30El = document.getElementById("p30");
+const p40El = document.getElementById("p40");
+const p50El = document.getElementById("p50");
 
 btnLocal.onclick = () => fileLocal.click();
 btnCamera.onclick = () => fileCamera.click();
+
+function formatEUR(x){
+  return (x || 0).toFixed(2).replace(".", ",") + " €";
+}
+
+/**
+ * Rundung: immer letzte Cent-Stelle = 9, aber NIE höher als original.
+ * Beispiele:
+ *  1,80 -> 1,79
+ * 12,34 -> 12,29
+ * 19,99 -> 19,99
+ */
+function roundToLastCent9(price){
+  if (!isFinite(price) || price <= 0) return 0;
+
+  // in Cent (floor => niemals höher)
+  let cents = Math.floor(price * 100 + 1e-6);
+
+  // größter Wert <= cents, der auf ...9 endet
+  // (cents - 9) % 10 => wie weit weg von einer Endziffer 9
+  const diff = (cents - 9) % 10;
+  cents = cents - diff;
+
+  // Sicherheitsklemme
+  if (cents < 0) cents = 0;
+
+  return cents / 100;
+}
 
 function resetUI(){
   previews.innerHTML = "";
   previewWrap.classList.add("hidden");
   lpEl.textContent = "–";
-  opEl.textContent = "–";
+  p20El.textContent = "–";
+  p30El.textContent = "–";
+  p40El.textContent = "–";
+  p50El.textContent = "–";
   noteEl.textContent = "";
   statusEl.textContent = "Bereit.";
   btnAgain.disabled = true;
@@ -170,8 +207,22 @@ async function handleFiles(fileList){
 
     if (!r.ok || !j.ok) throw new Error(j.error || "Fehler");
 
-    lpEl.textContent = (j.list_price || 0).toFixed(2).replace(".", ",") + " €";
-    opEl.textContent = (j.our_price || 0).toFixed(2).replace(".", ",") + " €";
+    const lp = j.list_price || 0;
+
+    // Listenpreis normal anzeigen
+    lpEl.textContent = formatEUR(lp);
+
+    // Rabattpreise berechnen & auf "...9" runden
+    const p20 = roundToLastCent9(lp * 0.80);
+    const p30 = roundToLastCent9(lp * 0.70);
+    const p40 = roundToLastCent9(lp * 0.60);
+    const p50 = roundToLastCent9(lp * 0.50);
+
+    p20El.textContent = formatEUR(p20);
+    p30El.textContent = formatEUR(p30);
+    p40El.textContent = formatEUR(p40);
+    p50El.textContent = formatEUR(p50);
+
     noteEl.textContent = "OK · " + (j.runtime_ms || 0) + " ms";
     statusEl.textContent = "Fertig.";
   } catch (e) {
