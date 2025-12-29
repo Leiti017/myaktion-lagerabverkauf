@@ -70,6 +70,7 @@
         <button id="btn-local" class="btn btn-ghost w-full mt-2">🗂️ Aus Dateien auswählen</button>
         <div id="previewWrap" class="mt-3 hidden">
           <div id="previews" class="grid grid-cols-2 gap-3"></div>
+          <div id="perPhoto" class="mt-3 grid gap-2"></div>
         </div>
         <div class="mt-3 flex gap-2">
           <button id="btn-again" class="btn btn-ghost w-full" disabled>♻️ Zurücksetzen</button>
@@ -119,6 +120,7 @@ const btnCamera = document.getElementById("btn-camera");
 const btnAgain = document.getElementById("btn-again");
 const previews = document.getElementById("previews");
 const previewWrap = document.getElementById("previewWrap");
+const perPhoto = document.getElementById("perPhoto");
 const statusEl = document.getElementById("status");
 const lpEl = document.getElementById("lp");
 const noteEl = document.getElementById("note");
@@ -145,6 +147,7 @@ function roundToLastCent9(price){
 
 function resetUI(){
   previews.innerHTML = "";
+  perPhoto.innerHTML = "";
   previewWrap.classList.add("hidden");
   lpEl.textContent = "–";
   p20El.textContent = "–";
@@ -167,6 +170,7 @@ async function handleFiles(fileList){
   if (!files || files.length === 0) return;
 
   previews.innerHTML = "";
+  perPhoto.innerHTML = "";
   previewWrap.classList.remove("hidden");
 
   for (const f of files) {
@@ -200,7 +204,24 @@ async function handleFiles(fileList){
     p40El.textContent = formatEUR(p40);
     p50El.textContent = formatEUR(p50);
 
-    noteEl.textContent = "OK · " + (j.runtime_ms || 0) + " ms";
+    // Preise pro Foto anzeigen (hilft: Front + Rückseite/Etikett)
+if (Array.isArray(j.items) && j.items.length) {
+  perPhoto.innerHTML = "";
+  j.items.forEach((it) => {
+    const row = document.createElement("div");
+    row.className = "flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-3 py-2";
+    const left = document.createElement("div");
+    left.className = "text-xs opacity-90";
+    left.textContent = `Foto ${Number(it.index) + 1} · ${it.source || ""}`;
+    const right = document.createElement("div");
+    right.className = "money text-sm font-extrabold";
+    right.textContent = formatEUR(Number(it.list_price || 0));
+    row.appendChild(left);
+    row.appendChild(right);
+    perPhoto.appendChild(row);
+  });
+}
+noteEl.textContent = "OK · " + (j.runtime_ms || 0) + " ms";
     statusEl.textContent = "Fertig.";
   } catch (e) {
     statusEl.textContent = "Fehler.";
