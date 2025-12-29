@@ -70,7 +70,6 @@
         <button id="btn-local" class="btn btn-ghost w-full mt-2">🗂️ Aus Dateien auswählen</button>
         <div id="previewWrap" class="mt-3 hidden">
           <div id="previews" class="grid grid-cols-2 gap-3"></div>
-          <div id="perPhoto" class="mt-3 grid gap-2"></div>
         </div>
         <div class="mt-3 flex gap-2">
           <button id="btn-again" class="btn btn-ghost w-full" disabled>♻️ Zurücksetzen</button>
@@ -105,6 +104,7 @@
           </div>
 
           <div id="note" class="text-[11px] opacity-75 mt-3"></div>
+<div id="perImage" class="text-[11px] opacity-75 mt-2"></div>
         </div>
       </section>
 
@@ -120,10 +120,10 @@ const btnCamera = document.getElementById("btn-camera");
 const btnAgain = document.getElementById("btn-again");
 const previews = document.getElementById("previews");
 const previewWrap = document.getElementById("previewWrap");
-const perPhoto = document.getElementById("perPhoto");
 const statusEl = document.getElementById("status");
 const lpEl = document.getElementById("lp");
 const noteEl = document.getElementById("note");
+const perImageEl = document.getElementById("perImage");
 const p20El = document.getElementById("p20");
 const p30El = document.getElementById("p30");
 const p40El = document.getElementById("p40");
@@ -147,7 +147,6 @@ function roundToLastCent9(price){
 
 function resetUI(){
   previews.innerHTML = "";
-  perPhoto.innerHTML = "";
   previewWrap.classList.add("hidden");
   lpEl.textContent = "–";
   p20El.textContent = "–";
@@ -155,6 +154,7 @@ function resetUI(){
   p40El.textContent = "–";
   p50El.textContent = "–";
   noteEl.textContent = "";
+  perImageEl.textContent = "";
   statusEl.textContent = "Bereit.";
   btnAgain.disabled = true;
 }
@@ -170,7 +170,6 @@ async function handleFiles(fileList){
   if (!files || files.length === 0) return;
 
   previews.innerHTML = "";
-  perPhoto.innerHTML = "";
   previewWrap.classList.remove("hidden");
 
   for (const f of files) {
@@ -204,24 +203,19 @@ async function handleFiles(fileList){
     p40El.textContent = formatEUR(p40);
     p50El.textContent = formatEUR(p50);
 
-    // Preise pro Foto anzeigen (hilft: Front + Rückseite/Etikett)
-if (Array.isArray(j.items) && j.items.length) {
-  perPhoto.innerHTML = "";
-  j.items.forEach((it) => {
-    const row = document.createElement("div");
-    row.className = "flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-3 py-2";
-    const left = document.createElement("div");
-    left.className = "text-xs opacity-90";
-    left.textContent = `Foto ${Number(it.index) + 1} · ${it.source || ""}`;
-    const right = document.createElement("div");
-    right.className = "money text-sm font-extrabold";
-    right.textContent = formatEUR(Number(it.list_price || 0));
-    row.appendChild(left);
-    row.appendChild(right);
-    perPhoto.appendChild(row);
-  });
-}
-noteEl.textContent = "OK · " + (j.runtime_ms || 0) + " ms";
+    noteEl.textContent = "OK · " + (j.runtime_ms || 0) + " ms · Quelle: " + (j.source || "-");
+
+    if (Array.isArray(j.per_image) && j.per_image.length){
+      const lines = j.per_image.map((x,i)=>`Foto ${i+1}: ${formatEUR(x.list_price||0)} · ${x.source||"-"}`);
+      perImageEl.textContent = lines.join(" | ");
+    } else {
+      perImageEl.textContent = "";
+    }
+
+    if ((j.list_price||0) <= 0 && Array.isArray(j.debug_errors) && j.debug_errors.length){
+      // show first error to help debugging
+      perImageEl.textContent = "Fehler-Info: " + JSON.stringify(j.debug_errors[0]).slice(0,240);
+    }
     statusEl.textContent = "Fertig.";
   } catch (e) {
     statusEl.textContent = "Fehler.";
