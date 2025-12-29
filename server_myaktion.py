@@ -1,7 +1,3 @@
-# server_myaktion.py – MyAktion Lagerabverkauf (Fotos → Preis)
-# Start (Render):
-#   uvicorn server_myaktion:app --host 0.0.0.0 --port $PORT
-
 from __future__ import annotations
 
 import io
@@ -9,37 +5,29 @@ import os
 import time
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Dict, Any
 
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 
-# Engines (OpenAI JSON-meta OR simpler PRICE_EUR parser)
 try:
-    from ki_engine_openai import generate_meta, generate_meta_multi
+    from ki_engine_openai import generate_meta, refine_with_ean
 except Exception:
     generate_meta = None
-    generate_meta_multi = None
-
-try:
-    from ki_engine_price import estimate_list_price_eur
-except Exception:
-    estimate_list_price_eur = None
-
+    refine_with_ean = None
 
 BASE_DIR = Path(__file__).resolve().parent
+
 app = FastAPI(title="MyAktion Preis-Scanner")
 
 
-# Render Health Check (wichtig)
 @app.api_route("/health", methods=["GET", "HEAD"])
 def render_health():
     return {"ok": True}
 
 
-# Static folder (icons, logo, etc.)
 static_dir = BASE_DIR / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
@@ -53,15 +41,13 @@ def home():
     return FileResponse(str(p))
 
 
-# =========================
-# PWA / Manifest
-# =========================
 @app.get("/manifest.json")
 def manifest_json():
     p = static_dir / "manifest.json"
     if not p.exists():
         return JSONResponse({"ok": False, "error": "static/manifest.json fehlt."}, status_code=404)
     return FileResponse(str(p))
+
 
 @app.get("/site.webmanifest")
 def site_webmanifest():
@@ -71,15 +57,13 @@ def site_webmanifest():
     return FileResponse(str(p))
 
 
-# =========================
-# Favicons / iOS Icons
-# =========================
 @app.get("/favicon.ico")
 def favicon():
     p = static_dir / "favicon.ico"
     if not p.exists():
         return JSONResponse({"ok": False, "error": "static/favicon.ico fehlt."}, status_code=404)
     return FileResponse(str(p))
+
 
 @app.get("/apple-touch-icon.png")
 def apple_touch_icon():
@@ -95,29 +79,13 @@ def health():
         "ok": True,
         "service": "myaktion-price-scan",
         "has_openai_engine": bool(generate_meta is not None),
-        "has_openai_multi": bool(generate_meta_multi is not None),
-        "has_simple_engine": bool(estimate_list_price_eur is not None),
         "has_openai_key": bool(os.getenv("OPENAI_API_KEY", "").strip()),
-        "openai_model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
     }
 
 
-# Helpful GET so you don't get confused by 405 in the browser
-@app.get("/api/scan")
-def scan_get_info():
-    return JSONResponse(
-        {
-            "ok": False,
-            "error": "Method Not Allowed: /api/scan erwartet POST mit FormData (files=...). "
-                     "Wenn du /api/scan im Browser öffnest, kommt sonst 405.",
-        },
-        status_code=200,
-    )
-
-
-def _downscale_and_fix_orientation(image_bytes: bytes, max_side: int = 1400) -> Image.Image:
+def _downscale_and_fix_orientation(image_bytes: bytes, max_side: int = 1600) -> Image.Image:
     img = Image.open(io.BytesIO(image_bytes))
-    img = ImageOps.exif_transpose(img)  # fix orientation
+    img = ImageOps.exif_transpose(img)
     if img.mode not in ("RGB", "L"):
         img = img.convert("RGB")
     w, h = img.size
@@ -141,22 +109,74 @@ def _safe_round_price_eur(x: float) -> float:
 
 
 def _our_price(list_price: float) -> float:
-    # Unser Preis = 80% vom Listenpreis (-20%)
     if not list_price or list_price <= 0:
         return 0.0
     return _safe_round_price_eur(list_price * 0.80)
 
 
-def _extract_price_from_meta(meta: dict) -> float:
-    if not meta or not isinstance(meta, dict):
+def _sanity_clamp_price(p: float) -> float:
+    # Anti-Fantasie: extreme Werte abwürgen
+    if not p or p <= 0:
         return 0.0
-    rp = meta.get("retail_price", meta.get("price"))
-    if rp is None:
+    if p > 5000:
         return 0.0
+    if p < 0.2:
+        return 0.0
+    return p
+
+
+def _extract(meta: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(meta, dict):
+        return {}
+    return {
+        "name": meta.get("name", "") or "",
+        "brand": meta.get("brand", "") or "",
+        "variant": meta.get("variant", "") or "",
+        "size_text": meta.get("size_text", "") or "",
+        "ean": meta.get("ean", "") or "",
+        "retail_price": meta.get("retail_price", meta.get("price", 0)) or 0,
+        "confidence": meta.get("confidence", 0.0) or 0.0,
+        "price_basis": meta.get("price_basis", "") or "",
+        "assumptions": meta.get("assumptions", "") or "",
+    }
+
+
+def _merge_keep_best(primary: Dict[str, Any], secondary: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge: prefer higher confidence; if equal, prefer non-guess basis."""
+    a = dict(primary or {})
+    b = dict(secondary or {})
     try:
-        return float(rp)
+        ca = float(a.get("confidence") or 0.0)
     except Exception:
-        return 0.0
+        ca = 0.0
+    try:
+        cb = float(b.get("confidence") or 0.0)
+    except Exception:
+        cb = 0.0
+
+    # pick winner
+    winner = a
+    loser = b
+    if cb > ca + 0.03:  # small margin
+        winner, loser = b, a
+    elif abs(cb - ca) <= 0.03:
+        # tie-breaker: prefer ean/tag over guess
+        pref = {"tag": 3, "ean": 2, "size": 1, "guess": 0}
+        wa = pref.get((a.get("price_basis") or "").strip(), 0)
+        wb = pref.get((b.get("price_basis") or "").strip(), 0)
+        if wb > wa:
+            winner, loser = b, a
+
+    # merge missing fields from loser into winner (but don't overwrite winner fields)
+    out = dict(winner)
+    for k, v in loser.items():
+        if k not in out or out.get(k) in ("", None, 0, 0.0):
+            out[k] = v
+
+    # if both have assumptions, concatenate
+    if (winner.get("assumptions") or "") and (loser.get("assumptions") or ""):
+        out["assumptions"] = f"{winner.get('assumptions')} | {loser.get('assumptions')}"
+    return out
 
 
 @app.post("/api/scan")
@@ -167,85 +187,88 @@ async def scan(files: List[UploadFile] = File(...)):
         return JSONResponse({"ok": False, "error": "Keine Dateien erhalten."}, status_code=400)
 
     has_key = bool(os.getenv("OPENAI_API_KEY", "").strip())
+    if generate_meta is None or not has_key:
+        src = "no-openai-engine" if generate_meta is None else "no-openai-key"
+        return JSONResponse(
+            {"ok": True, "list_price": 0.0, "our_price": 0.0, "source": src, "runtime_ms": int((time.time() - t0) * 1000)}
+        )
 
-    # Save temp images once so we can do multi-image in one call
-    tmp_paths: List[Path] = []
-    per_image = []
-    debug_errors = []
-
+    tmp_paths: List[str] = []
     try:
         for f in files:
             raw = await f.read()
             img = _downscale_and_fix_orientation(raw)
             tmp_path = BASE_DIR / f"_tmp_{uuid.uuid4().hex}.jpg"
             img.save(tmp_path, "JPEG", quality=86)
-            tmp_paths.append(tmp_path)
+            tmp_paths.append(str(tmp_path))
 
-        best_price = 0.0
-        best_source = "manual"
-        meta_used = None
+        # Pass 1: Multi-Foto-Fusion
+        meta1 = generate_meta(tmp_paths, context=None)
+        ex1 = _extract(meta1)
 
-        # 1) Prefer multi-image engine if available and we have 2+ images
-        if len(tmp_paths) >= 2 and generate_meta_multi is not None and has_key:
-            meta = generate_meta_multi([str(p) for p in tmp_paths], art_id="lagerabverkauf")
-            meta_used = meta
-            lp = _safe_round_price_eur(_extract_price_from_meta(meta))
-            if lp > 0:
-                best_price = lp
-                best_source = "openai-multi"
-            else:
-                debug_errors.append(meta if isinstance(meta, dict) else {"error": "unknown_meta"})
-        # 2) Otherwise evaluate each image (openai meta OR simple engine) and take the best
-        else:
-            context: Optional[dict] = None
-            for p in tmp_paths:
-                list_price = 0.0
-                source = "manual"
-                meta = None
-
-                if generate_meta is not None and has_key:
-                    meta = generate_meta(str(p), art_id="lagerabverkauf", context=context)
-                    if isinstance(meta, dict) and "error" not in meta:
-                        context = meta
-                    list_price = _extract_price_from_meta(meta)
-                    source = "openai"
-                elif estimate_list_price_eur is not None and has_key:
-                    # fallback: older, very robust "PRICE_EUR=.." parser
-                    val = estimate_list_price_eur(str(p))
-                    list_price = val or 0.0
-                    source = "openai-simple"
-                else:
-                    source = "no-openai-key" if not has_key else "no-engine"
-
-                list_price = _safe_round_price_eur(list_price)
-                per_image.append({"file": getattr(p, "name", "image"), "source": source, "list_price": list_price, "meta": meta})
-
-                if isinstance(meta, dict) and meta.get("error"):
-                    debug_errors.append(meta)
-
-                if list_price > best_price:
-                    best_price = list_price
-                    best_source = source
-                    meta_used = meta
-
-        our_price = _our_price(best_price)
-
-        return JSONResponse(
-            {
-                "ok": True,
-                "list_price": best_price,
-                "our_price": our_price,
-                "source": best_source,
-                "runtime_ms": int((time.time() - t0) * 1000),
-                "per_image": per_image,
-                "debug_errors": debug_errors[:3],  # keep it small
-                "meta_used": meta_used if isinstance(meta_used, dict) else None,
-            }
-        )
+        # Pass 2: EAN refine (wenn EAN erkennbar)
+        ex_final = dict(ex1)
+        if refine_with_ean is not None:
+            ean = (ex1.get("ean") or "").strip()
+            if ean:
+                meta2 = refine_with_ean(ean, hint_meta=ex1)
+                ex2 = _extract(meta2)
+                ex_final = _merge_keep_best(ex1, ex2)
 
     finally:
         for p in tmp_paths:
             try:
-                p.unlink(missing_ok=True)
+                Path(p).unlink(missing_ok=True)
             except Exception:
                 pass
+
+    # Price
+    try:
+        list_price = float(ex_final.get("retail_price") or 0.0)
+    except Exception:
+        list_price = 0.0
+
+    list_price = _safe_round_price_eur(_sanity_clamp_price(list_price))
+    our_price = _our_price(list_price)
+
+    # Diagnostics / Warnings
+    try:
+        conf = float(ex_final.get("confidence") or 0.0)
+    except Exception:
+        conf = 0.0
+
+    basis = (ex_final.get("price_basis") or "").strip()
+    size_text = (ex_final.get("size_text") or "").strip()
+    ean = (ex_final.get("ean") or "").strip()
+    assumptions = (ex_final.get("assumptions") or "").strip()
+
+    warnings = []
+    if basis == "guess" or conf < 0.55:
+        warnings.append("Unsicher: Schätzung ohne klare Preisevidenz")
+    if not size_text:
+        warnings.append("Menge nicht klar erkannt")
+    if not ean and (basis in ("guess", "size")) and conf < 0.65:
+        warnings.append("EAN/Barcode nicht erkannt")
+    if assumptions:
+        warnings.append(f"Annahme: {assumptions}")
+
+    warning_text = " · ".join(warnings).strip()
+
+    source = "openai"
+    if conf < 0.55:
+        source = "openai_low_conf"
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "list_price": list_price,
+            "our_price": our_price,
+            "source": source,
+            "confidence": round(conf, 2),
+            "price_basis": basis,
+            "size_text": size_text,
+            "ean": ean,
+            "warning": warning_text,
+            "runtime_ms": int((time.time() - t0) * 1000),
+        }
+    )

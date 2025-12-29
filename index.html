@@ -104,7 +104,6 @@
           </div>
 
           <div id="note" class="text-[11px] opacity-75 mt-3"></div>
-<div id="perImage" class="text-[11px] opacity-75 mt-2"></div>
         </div>
       </section>
 
@@ -123,7 +122,6 @@ const previewWrap = document.getElementById("previewWrap");
 const statusEl = document.getElementById("status");
 const lpEl = document.getElementById("lp");
 const noteEl = document.getElementById("note");
-const perImageEl = document.getElementById("perImage");
 const p20El = document.getElementById("p20");
 const p30El = document.getElementById("p30");
 const p40El = document.getElementById("p40");
@@ -154,7 +152,6 @@ function resetUI(){
   p40El.textContent = "–";
   p50El.textContent = "–";
   noteEl.textContent = "";
-  perImageEl.textContent = "";
   statusEl.textContent = "Bereit.";
   btnAgain.disabled = true;
 }
@@ -203,19 +200,16 @@ async function handleFiles(fileList){
     p40El.textContent = formatEUR(p40);
     p50El.textContent = formatEUR(p50);
 
-    noteEl.textContent = "OK · " + (j.runtime_ms || 0) + " ms · Quelle: " + (j.source || "-");
+    const conf = (j.confidence ?? "").toString();
+const basis = (j.price_basis ?? "").toString();
+const warn = (j.warning ?? "").toString();
 
-    if (Array.isArray(j.per_image) && j.per_image.length){
-      const lines = j.per_image.map((x,i)=>`Foto ${i+1}: ${formatEUR(x.list_price||0)} · ${x.source||"-"}`);
-      perImageEl.textContent = lines.join(" | ");
-    } else {
-      perImageEl.textContent = "";
-    }
+let note = `OK · ${j.runtime_ms || 0} ms`;
+if (conf) note += ` · conf=${conf}`;
+if (basis) note += ` · basis=${basis}`;
+if (warn) note += ` · ${warn}`;
 
-    if ((j.list_price||0) <= 0 && Array.isArray(j.debug_errors) && j.debug_errors.length){
-      // show first error to help debugging
-      perImageEl.textContent = "Fehler-Info: " + JSON.stringify(j.debug_errors[0]).slice(0,240);
-    }
+noteEl.textContent = note;
     statusEl.textContent = "Fertig.";
   } catch (e) {
     statusEl.textContent = "Fehler.";
