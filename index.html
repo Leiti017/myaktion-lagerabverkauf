@@ -200,16 +200,7 @@ async function handleFiles(fileList){
     p40El.textContent = formatEUR(p40);
     p50El.textContent = formatEUR(p50);
 
-    const conf = (j.confidence ?? "").toString();
-const basis = (j.price_basis ?? "").toString();
-const warn = (j.warning ?? "").toString();
-
-let note = `OK · ${j.runtime_ms || 0} ms`;
-if (conf) note += ` · conf=${conf}`;
-if (basis) note += ` · basis=${basis}`;
-if (warn) note += ` · ${warn}`;
-
-noteEl.textContent = note;
+    noteEl.textContent = "OK · " + (j.runtime_ms || 0) + " ms";
     statusEl.textContent = "Fertig.";
   } catch (e) {
     statusEl.textContent = "Fehler.";

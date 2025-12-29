@@ -115,12 +115,10 @@ def _our_price(list_price: float) -> float:
 
 
 def _sanity_clamp_price(p: float) -> float:
-    # Anti-Fantasie: extreme Werte abwürgen
+    # Nur extreme Ausreißer killen (damit "guess" nicht ständig zu 0 wird)
     if not p or p <= 0:
         return 0.0
     if p > 5000:
-        return 0.0
-    if p < 0.2:
         return 0.0
     return p
 
@@ -133,6 +131,8 @@ def _extract(meta: Dict[str, Any]) -> Dict[str, Any]:
         "brand": meta.get("brand", "") or "",
         "variant": meta.get("variant", "") or "",
         "size_text": meta.get("size_text", "") or "",
+        "size_value": meta.get("size_value", None),
+        "size_unit": meta.get("size_unit", "") or "",
         "ean": meta.get("ean", "") or "",
         "retail_price": meta.get("retail_price", meta.get("price", 0)) or 0,
         "confidence": meta.get("confidence", 0.0) or 0.0,
@@ -142,7 +142,6 @@ def _extract(meta: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _merge_keep_best(primary: Dict[str, Any], secondary: Dict[str, Any]) -> Dict[str, Any]:
-    """Merge: prefer higher confidence; if equal, prefer non-guess basis."""
     a = dict(primary or {})
     b = dict(secondary or {})
     try:
@@ -154,26 +153,21 @@ def _merge_keep_best(primary: Dict[str, Any], secondary: Dict[str, Any]) -> Dict
     except Exception:
         cb = 0.0
 
-    # pick winner
-    winner = a
-    loser = b
-    if cb > ca + 0.03:  # small margin
+    winner, loser = a, b
+    if cb > ca + 0.03:
         winner, loser = b, a
     elif abs(cb - ca) <= 0.03:
-        # tie-breaker: prefer ean/tag over guess
         pref = {"tag": 3, "ean": 2, "size": 1, "guess": 0}
         wa = pref.get((a.get("price_basis") or "").strip(), 0)
         wb = pref.get((b.get("price_basis") or "").strip(), 0)
         if wb > wa:
             winner, loser = b, a
 
-    # merge missing fields from loser into winner (but don't overwrite winner fields)
     out = dict(winner)
     for k, v in loser.items():
         if k not in out or out.get(k) in ("", None, 0, 0.0):
             out[k] = v
 
-    # if both have assumptions, concatenate
     if (winner.get("assumptions") or "") and (loser.get("assumptions") or ""):
         out["assumptions"] = f"{winner.get('assumptions')} | {loser.get('assumptions')}"
     return out
@@ -194,6 +188,8 @@ async def scan(files: List[UploadFile] = File(...)):
         )
 
     tmp_paths: List[str] = []
+    ex_final: Dict[str, Any] = {}
+
     try:
         for f in files:
             raw = await f.read()
@@ -202,18 +198,15 @@ async def scan(files: List[UploadFile] = File(...)):
             img.save(tmp_path, "JPEG", quality=86)
             tmp_paths.append(str(tmp_path))
 
-        # Pass 1: Multi-Foto-Fusion
         meta1 = generate_meta(tmp_paths, context=None)
         ex1 = _extract(meta1)
-
-        # Pass 2: EAN refine (wenn EAN erkennbar)
         ex_final = dict(ex1)
-        if refine_with_ean is not None:
-            ean = (ex1.get("ean") or "").strip()
-            if ean:
-                meta2 = refine_with_ean(ean, hint_meta=ex1)
-                ex2 = _extract(meta2)
-                ex_final = _merge_keep_best(ex1, ex2)
+
+        ean = (ex1.get("ean") or "").strip()
+        if refine_with_ean is not None and ean:
+            meta2 = refine_with_ean(ean, hint_meta=ex1)
+            ex2 = _extract(meta2)
+            ex_final = _merge_keep_best(ex1, ex2)
 
     finally:
         for p in tmp_paths:
@@ -222,7 +215,6 @@ async def scan(files: List[UploadFile] = File(...)):
             except Exception:
                 pass
 
-    # Price
     try:
         list_price = float(ex_final.get("retail_price") or 0.0)
     except Exception:
@@ -231,7 +223,6 @@ async def scan(files: List[UploadFile] = File(...)):
     list_price = _safe_round_price_eur(_sanity_clamp_price(list_price))
     our_price = _our_price(list_price)
 
-    # Diagnostics / Warnings
     try:
         conf = float(ex_final.get("confidence") or 0.0)
     except Exception:
@@ -253,10 +244,7 @@ async def scan(files: List[UploadFile] = File(...)):
         warnings.append(f"Annahme: {assumptions}")
 
     warning_text = " · ".join(warnings).strip()
-
-    source = "openai"
-    if conf < 0.55:
-        source = "openai_low_conf"
+    source = "openai" if conf >= 0.55 else "openai_low_conf"
 
     return JSONResponse(
         {

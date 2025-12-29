@@ -17,26 +17,38 @@ def _b64_image(path: str) -> str:
 def _system_prompt_multi() -> str:
     return (
         "Du bist ein extrem präziser Preis-Analyst für Handel/Marktpreise (EUR).\n"
-        "Du bekommst 1-4 Fotos vom SELBEN Produkt (Front/Back/Barcode/Preisschild).\n"
+        "Du bekommst 1-4 Fotos vom SELBEN Produkt (Front/Back/Bottom/Barcode/Preisschild).\n"
         "\n"
         "Ziel: Gib einen realistischen aktuellen Neupreis (Listen-/Marktpreis) in EUR.\n"
         "\n"
+        "KERNREGEL (wichtig):\n"
+        "- retail_price darf NICHT 0 sein, außer das Produkt ist wirklich nicht identifizierbar.\n"
+        "- Wenn Marke/Name erkennbar sind, aber Preis/EAN/Menge nicht: gib eine konservative Schätzung (nicht 0)\n"
+        "  und setze confidence niedrig.\n"
+        "\n"
         "Anti-Fantasie-Regeln (sehr wichtig):\n"
-        "- Erfinde KEINE konkreten Produktdetails (Menge/Variante/Preis) wenn nicht im Bild erkennbar.\n"
+        "- Erfinde KEINE konkreten Produktdetails (Menge/Variante/Preis), wenn nicht im Bild erkennbar.\n"
         "- Nutze harte Evidenz in dieser Priorität:\n"
         "  (1) klar sichtbarer Preis/UVP/Etikett\n"
         "  (2) EAN/Barcode (wenn lesbar)\n"
-        "  (3) klar erkennbare Menge/Variante (z.B. 100g vs 250g, 250ml vs 400ml, Stückzahl, Multipack)\n"
-        "  (4) nur wenn Produkt sehr eindeutig auch ohne Menge: vorsichtige Schätzung, aber als Annahme markieren.\n"
+        "  (3) klar erkennbare Menge/Variante (100g vs 250g, 50ml vs 100ml, Stückzahl, Multipack)\n"
+        "  (4) falls Produkt klar, aber Menge unklar: vorsichtige Schätzung, als Annahme markieren\n"
         "\n"
-        "Wenn du nur unsicher raten würdest: gib einen vorsichtigen Preis und setze confidence niedrig.\n"
+        "Mengen-Anpassung (wenn Menge erkennbar):\n"
+        "- Passe den Preis an die erkannte Menge an.\n"
+        "- Bei typischen Konsumgütern steigt Preis mit Menge meist weniger als linear (Mengenrabatt).\n"
+        "  Beispiel: 2x Menge => meist ~1.5x bis 1.9x Preis (je nach Produkt).\n"
         "\n"
-        "Gib am Ende NUR JSON (ohne Text) mit diesem Schema:\n"
+        "Wenn nur unsicher: gib vorsichtigen Preis und setze confidence niedrig.\n"
+        "\n"
+        "Gib am Ende NUR JSON (ohne Text) mit Schema:\n"
         "{\n"
         '  "name": "",\n'
         '  "brand": "",\n'
         '  "variant": "",\n'
         '  "size_text": "",\n'
+        '  "size_value": null,\n'
+        '  "size_unit": "",\n'
         '  "ean": "",\n'
         '  "retail_price": 0,\n'
         '  "confidence": 0.0,\n'
@@ -44,11 +56,13 @@ def _system_prompt_multi() -> str:
         '  "assumptions": ""\n'
         "}\n"
         "\n"
+        "size_value/size_unit: falls möglich, extrahiere Zahl und Einheit (ml/g/kg/l/Stk).\n"
+        "\n"
         "confidence Skala:\n"
         "- 0.85-1.0: Preis/UVP klar im Bild\n"
         "- 0.65-0.85: EAN oder Menge+Variante klar\n"
         "- 0.40-0.65: Produkt klar, aber Menge unklar (vorsichtige Annahme)\n"
-        "- <0.40: sehr unsicher, nur vorsichtige Schätzung\n"
+        "- 0.25-0.40: nur Marke/Name klar, konservative Schätzung\n"
     )
 
 
@@ -58,10 +72,11 @@ def _system_prompt_ean_refine() -> str:
         "Du bekommst eine EAN (Barcode-Nummer) und optional Produkt-Hinweise.\n"
         "Aufgabe: Bestimme den realistischen aktuellen Neupreis (Listen-/Marktpreis) in EUR.\n"
         "\n"
+        "KERNREGEL: retail_price darf NICHT 0 sein, außer die EAN ist offensichtlich unbrauchbar.\n"
+        "\n"
         "Anti-Fantasie-Regeln:\n"
-        "- Wenn du nicht sicher bist, was die EAN genau ist, gib eine vorsichtige Schätzung und setze confidence niedrig.\n"
+        "- Wenn EAN nicht eindeutig ist: gib eine konservative Schätzung und setze confidence niedrig.\n"
         "- Erfinde keine Menge/Variante, wenn nicht aus EAN/Hinweisen ableitbar.\n"
-        "- Wenn die EAN sehr eindeutig auf ein Produkt zeigt, darf confidence höher sein.\n"
         "\n"
         "Gib NUR JSON (ohne Text) aus mit Schema:\n"
         "{\n"
@@ -69,6 +84,8 @@ def _system_prompt_ean_refine() -> str:
         '  "brand":"",\n'
         '  "variant":"",\n'
         '  "size_text":"",\n'
+        '  "size_value": null,\n'
+        '  "size_unit":"",\n'
         '  "ean":"",\n'
         '  "retail_price":0,\n'
         '  "confidence":0.0,\n'
@@ -151,9 +168,6 @@ def generate_meta(image_paths: Union[str, List[str]], context: Optional[dict] = 
 
 
 def refine_with_ean(ean: str, hint_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Second pass: If EAN is available, try to stabilize product identification and price.
-    This does NOT browse the web; it relies on model knowledge + provided hints.
-    """
     if not OPENAI_API_KEY:
         return {"error": "missing_openai_api_key"}
 
@@ -163,16 +177,15 @@ def refine_with_ean(ean: str, hint_meta: Optional[Dict[str, Any]] = None) -> Dic
 
     hints = {}
     if isinstance(hint_meta, dict):
-        # keep only small, safe hints
-        for k in ("name", "brand", "variant", "size_text"):
+        for k in ("name", "brand", "variant", "size_text", "size_value", "size_unit"):
             v = hint_meta.get(k)
-            if isinstance(v, str) and v.strip():
-                hints[k] = v.strip()
+            if isinstance(v, (str, int, float)) and str(v).strip():
+                hints[k] = v
 
     user_text = {
         "ean": ean,
         "hints": hints,
-        "instruction": "Nutze EAN primär. Falls unklar, vorsichtige Schätzung mit niedriger confidence.",
+        "instruction": "Nutze EAN primär. Falls unklar, konservative Schätzung (nicht 0) mit niedriger confidence.",
     }
 
     payload = {
