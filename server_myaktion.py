@@ -18,9 +18,13 @@ from PIL import Image, ImageOps
 
 try:
     from ki_engine_openai import generate_meta
-    from ki_engine_openai import generate_meta_multi
 except Exception:
     generate_meta = None
+
+try:
+    from ki_engine_openai import generate_meta_multi
+except Exception:
+    generate_meta_multi = None
 
 BASE_DIR = Path(__file__).resolve().parent
 
